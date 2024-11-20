@@ -1,14 +1,219 @@
+<!DOCTYPE html>
+<html>
 
-  <h2>Selection Change Observer</h2>
-  <p>Observe the contents of figma.selection change as you change the selection in the file.</p>
-  <p>ID of selection is: </p>
-  <p id=selection></p>
+<head>
+  <style>
+    body {
+      font-family: Inter, sans-serif;
+      padding: 20px;
+      margin: 0;
+    }
+
+    .collection {
+      margin-bottom: 24px;
+      border: 1px solid #e5e5e5;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .collection-header {
+      background: #f5f5f5;
+      padding: 12px;
+      font-weight: bold;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .mode-selector {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+      background: #fafafa;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .mode-button {
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .mode-button.active {
+      background: #0066FF;
+      color: white;
+      border-color: #0066FF;
+    }
+
+    .variable-list {
+      padding: 12px;
+    }
+
+    .variable-item {
+      margin-top: 8px;
+      margin-bottom: 8px;
+      padding: 8px;
+      background: #f9f9f9;
+      border-radius: 4px;
+    }
+
+    .variable-name {
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .variable-type {
+      color: #666;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .typescript-code {
+      font-family: monospace;
+      background: white;
+      padding: 8px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .copy-button {
+      padding: 4px 8px;
+      background: #0066FF;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .copy-button:hover {
+      background: #0052cc;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app"></div>
 
   <script>
+    let currentData = null;
 
-  onmessage = (event) => {
-    document.getElementById('selection').innerHTML = event.data.pluginMessage[0] ? event.data.pluginMessage[0].id : 'No selection';
-  }
+    window.onload = () => {
+      parent.postMessage({ pluginMessage: { type: 'get-variables' } }, '*');
+    };
+
+    window.onmessage = (event) => {
+      const message = event.data.pluginMessage;
+
+      if (message.type === 'variables-data') {
+        currentData = message.collections;
+        displayCollections(currentData);
+      } else if (msg.type === 'clipboard-copied') {
+        alert('Text copied to clipboard!');
+      } else if (message.type === 'error') {
+        console.error(message.message);
+      }
+    };
+
+    function displayCollections(collections) {
+      const container = document.getElementById('app');
+      container.innerHTML = collections.map(collection => `
+        <div class="collection" id="collection-${collection.collectionId}">
+          <div class="collection-header">
+            <div>${collection.collectionName}</div>
+          </div>
+          <div class="mode-selector">
+            mode:
+            ${collection.modes.map(mode => `
+              <button
+                class="mode-button ${mode.isDefault ? 'active' : ''}"
+                onclick="switchMode('${collection.collectionId}', '${mode.id}')"
+                data-mode-id="${mode.id}"
+              >
+                ${mode.name}
+              </button>
+            `).join('')}
+          </div>
+          <div class="variable-list">
+            ${renderVariables(collection.variablesByMode, collection.modes.find(m => m.isDefault).id, collection.collectionId)}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderVariables(variablesByMode, selectedModeId, collectionId) {
+      const variables = variablesByMode.find(v => v.modeId === selectedModeId);
+      const typescriptCode = Object.keys(variables.data).map((key) => {
+        const variable = variables.data[key];
+        return `export const ${key} = ` + JSON.stringify(variable, null, 2).replace(/"##(.*?)##"/g, '$1');
+      }).join('\n\n');
+
+      return `
+          <button class="copy-button" onclick="copyToClipboard('${collectionId}', this)">
+            copy
+          </button>
+          <div class="variable-item">
+            <div class="typescript-code">${typescriptCode}</div>
+          </div>
+        `
+    }
+
+    function switchMode(collectionId, modeId) {
+      const collection = document.getElementById(`collection-${collectionId}`);
+
+      // モードボタンの表示を更新
+      collection.querySelectorAll('.mode-button').forEach(button => {
+        button.classList.toggle('active', button.dataset.modeId === modeId);
+      });
+
+
+      // 変数リストを更新
+      const collectionData = currentData.find(c => c.collectionId === collectionId);
+      collection.querySelector('.variable-list').innerHTML =
+        renderVariables(collectionData.variablesByMode, modeId);
+    }
+
+    async function copyToClipboard(collectionId) {
+      const collection = document.getElementById(`collection-${collectionId}`);
+
+      // モードボタンの表示を更新
+      const typescriptCode = collection.querySelector('.typescript-code');
+      // const text = decodeURIComponent(encodedText);
+      console.log(typescriptCode);
+
+      fallbackCopyTextToClipboard(typescriptCode.innerText);
+      // parent.postMessage({ pluginMessage: { type: 'copy-to-clipboard', text } }, '*');
+
+      // const originalText = button.textContent;
+    }
+
+    function fallbackCopyTextToClipboard(text) {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed'; // テキストエリアを非表示にする
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      try {
+        const successful = document.execCommand('copy');
+        console.log('Fallback: Copying text command was ' + (successful ? 'successful' : 'unsuccessful'));
+      } catch (err) {
+        console.error('Fallback: Unable to copy text', err);
+      }
+
+      document.body.removeChild(textArea);
+    }
+
 
   </script>
-  
+</body>
+
+</html>
