@@ -185,13 +185,7 @@
 
       // モードボタンの表示を更新
       const typescriptCode = collection.querySelector('.typescript-code');
-      // const text = decodeURIComponent(encodedText);
-      console.log(typescriptCode);
-
       fallbackCopyTextToClipboard(typescriptCode.innerText);
-      // parent.postMessage({ pluginMessage: { type: 'copy-to-clipboard', text } }, '*');
-
-      // const originalText = button.textContent;
     }
 
     function fallbackCopyTextToClipboard(text) {
