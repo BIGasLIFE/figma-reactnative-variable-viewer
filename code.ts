@@ -10,10 +10,53 @@ figma.ui.onmessage = async (msg) => {
   }
 };
 
+async function sortVariablesByDisplayOrder(localVariables: Variable[]) {
+  // まずコレクションごとに変数をグループ化
+  const variablesByCollection = new Map<string, Variable[]>();
+
+  // 各変数をそのコレクションIDでグループ化
+  localVariables.forEach((variable) => {
+    const collectionId = variable.variableCollectionId;
+    if (!variablesByCollection.has(collectionId)) {
+      variablesByCollection.set(collectionId, []);
+    }
+    variablesByCollection.get(collectionId)?.push(variable);
+  });
+
+  // 結果を格納する配列
+  const sortedVariables: Variable[] = [];
+
+  // コレクション順に処理
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+
+  collections.forEach((collection) => {
+    const collectionVariables = variablesByCollection.get(collection.id) || [];
+
+    // コレクション内の変数をvariableIdsの順序に並び替え
+    if (collection.variableIds && collection.variableIds.length > 0) {
+      // variableIdsの順序に基づいてソート
+      const orderedVariables = collection.variableIds
+        .map((id) => collectionVariables.find((v) => v.id === id))
+        .filter((v): v is Variable => v !== undefined);
+
+      // ソートされた変数を結果配列に追加
+      sortedVariables.push(...orderedVariables);
+    } else {
+      // variableIdsがない場合は元の順序を維持
+      sortedVariables.push(...collectionVariables);
+    }
+  });
+
+  return sortedVariables;
+}
+
 async function getVariables() {
   try {
     // ローカル変数とコレクションを取得
     const localVariables = await figma.variables.getLocalVariablesAsync();
+    const sortedLocalVariables = await sortVariablesByDisplayOrder(
+      localVariables
+    );
 
     const collections =
       await figma.variables.getLocalVariableCollectionsAsync();
@@ -21,7 +64,7 @@ async function getVariables() {
     // 変数をコレクションごとにグループ化
     const variablesByCollection = await Promise.all(
       collections.map(async (collection) => {
-        const variables = localVariables.filter(
+        const variables = sortedLocalVariables.filter(
           (v) => v.variableCollectionId === collection.id
         );
 
@@ -47,7 +90,7 @@ async function getVariables() {
               }
               const filteredTmp = tmp.filter(isNotNull);
 
-              const data = arrayToNestedObject(filteredTmp);
+              const data = arrayToNestedObject(collection.name, filteredTmp);
 
               return {
                 modeId: mode.modeId,
@@ -93,8 +136,17 @@ async function generateTypeScriptDefinition(
 
   if (isVariableAlias(value)) {
     const resolvedValue = await figma.variables.getVariableByIdAsync(value.id);
-    const name = resolvedValue !== null ? resolvedValue.name : "";
-    resultValue = `##${generateVariableString(name)}##`;
+    if (resolvedValue !== null) {
+      const collection = await figma.variables.getVariableCollectionByIdAsync(
+        resolvedValue.variableCollectionId
+      );
+      if (collection !== null) {
+        resultValue = `##${generateVariableString(
+          collection.name,
+          resolvedValue.name
+        )}##`;
+      }
+    }
   } else {
     switch (variable.resolvedType) {
       case "COLOR": {
@@ -153,7 +205,14 @@ function variableValueToColor(value: VariableValue | null): RGBA | null {
   return null;
 }
 
+function toLowerFirstChar(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+// type NestedValues = Map<string, NestedValues | string | number | boolean>;
+
 function arrayToNestedObject(
+  collectionName: string,
   arr: Array<{ name: string; value: string | number | boolean }>
 ) {
   const result: NestedObject = {};
@@ -161,11 +220,13 @@ function arrayToNestedObject(
   arr.forEach((item) => {
     // スラッシュで分割してパスの配列を作成
     const paths = item.name.split("/");
-    const camelPaths = paths.map((path) => kebabToCamel(path));
+    const camelNames = [collectionName.replace(/^_/, ""), ...paths].map(
+      (path) => kebabToCamel(toLowerFirstChar(path))
+    );
     let current = result;
 
-    // 最後のパス以外をループ
-    camelPaths.slice(0, -1).forEach((path) => {
+    // コレクション名と最後のパス以外
+    camelNames.slice(0, -1).forEach((path) => {
       if (!(path in current)) {
         current[path] = {};
       }
@@ -174,7 +235,7 @@ function arrayToNestedObject(
     });
 
     // 最後のパスに値を設定
-    current[camelPaths[camelPaths.length - 1]] = item.value;
+    current[camelNames[camelNames.length - 1]] = item.value;
   });
 
   return result;
@@ -184,7 +245,7 @@ function kebabToCamel(kebabCase: string): string {
   return kebabCase.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
 }
 
-function generateVariableString(path: string) {
+function generateVariableString(collectionName: string, path: string) {
   // スラッシュで分割
   const parts = path.split("/");
 
@@ -193,18 +254,14 @@ function generateVariableString(path: string) {
   }
 
   // 先頭部分をキャメルケースに変換
-  const camelCase = parts[0]
+  const camelCase = collectionName
+    .replace(/^_/, "")
     .split("-")
-    .map((word, index) =>
-      index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
-    )
+    .map(toLowerFirstChar)
     .join("");
 
   // 残り部分をブラケット表記に変換
-  const keys = parts
-    .slice(1)
-    .map((part) => `['${part}']`)
-    .join("");
+  const keys = parts.map((part) => `['${kebabToCamel(part)}']`).join("");
 
   // 最終的な文字列を生成
   return `${camelCase}${keys}`;
